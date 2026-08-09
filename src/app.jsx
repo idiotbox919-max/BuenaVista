@@ -1,0 +1,529 @@
+import React, { useState, useEffect } from 'react';
+
+const FAMILY_GROUPS = {
+  Hills: ['Russ', 'Ry'],
+  Bowmans: ['Rich', 'Al'],
+  Wrights: ['Rebecca', 'Katie']
+};
+
+const BASE_ALLOWANCE_PER_GROUP = 14;
+const TOTAL_SUMMER_DAYS = 42;
+const DEADLINE = new Date('2026-09-30T23:59:59');
+
+export default function App() {
+  const [requests, setRequests] = useState({
+    Russ: { days: '', pref: 'start', mayHalfTerm: false },
+    Ry: { days: '', pref: 'start', mayHalfTerm: false },
+    Rich: { days: '', pref: 'start', mayHalfTerm: false },
+    Al: { days: '', pref: 'start', mayHalfTerm: false },
+    Rebecca: { days: '', pref: 'start', mayHalfTerm: false },
+    Katie: { days: '', pref: 'start', mayHalfTerm: false }
+  });
+
+  const [groupSubmitted, setGroupSubmitted] = useState({
+    Hills: false,
+    Bowmans: false,
+    Wrights: false
+  });
+
+  const [overallResult, setOverallResult] = useState(null);
+  const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
+
+  useEffect(() => {
+    const calculateTimeLeft = () => {
+      const difference = +DEADLINE - +new Date();
+      if (difference > 0) {
+        setTimeLeft({
+          days: Math.floor(difference / (1000 * 60 * 60 * 24)),
+          hours: Math.floor((difference / (1000 * 60 * 60)) % 24),
+          minutes: Math.floor((difference / 1000 / 60) % 60),
+          seconds: Math.floor((difference / 1000) % 60),
+        });
+      }
+    };
+
+    calculateTimeLeft();
+    const timer = setInterval(calculateTimeLeft, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleRequestChange = (family, field, value) => {
+    setRequests(prev => ({
+      ...prev,
+      [family]: {
+        ...prev[family],
+        [field]: field === 'days' 
+          ? (value === '' ? '' : Math.max(0, parseInt(value, 10) || 0)) 
+          : value
+      }
+    }));
+    setOverallResult(null);
+  };
+
+  const getGroupTotal = (groupName, customRequests = requests) => {
+    return FAMILY_GROUPS[groupName].reduce((sum, family) => {
+      const val = parseInt(customRequests[family].days, 10);
+      return sum + (isNaN(val) ? 0 : val);
+    }, 0);
+  };
+
+  const handleGroupSubmit = (groupName) => {
+    setGroupSubmitted(prev => ({ ...prev, [groupName]: true }));
+  };
+
+  const handleGroupEdit = (groupName) => {
+    setGroupSubmitted(prev => ({ ...prev, [groupName]: false }));
+    setOverallResult(null);
+  };
+
+  const runCalculation = (targetRequests) => {
+    const totals = {
+      Hills: getGroupTotal('Hills', targetRequests),
+      Bowmans: getGroupTotal('Bowmans', targetRequests),
+      Wrights: getGroupTotal('Wrights', targetRequests)
+    };
+
+    const grandTotal = totals.Hills + totals.Bowmans + totals.Wrights;
+    const isOverCapacity = grandTotal > TOTAL_SUMMER_DAYS;
+
+    let groupAllowances = {
+      Hills: BASE_ALLOWANCE_PER_GROUP,
+      Bowmans: BASE_ALLOWANCE_PER_GROUP,
+      Wrights: BASE_ALLOWANCE_PER_GROUP
+    };
+
+    if (isOverCapacity) {
+      let deductedDaysTotal = 0;
+      let nonMayGroups = [];
+
+      Object.entries(FAMILY_GROUPS).forEach(([group, members]) => {
+        const hasMay = members.some(m => targetRequests[m].mayHalfTerm);
+        if (hasMay) {
+          groupAllowances[group] = Math.max(0, groupAllowances[group] - 7);
+          deductedDaysTotal += 7;
+        } else {
+          nonMayGroups.push(group);
+        }
+      });
+
+      if (nonMayGroups.length > 0 && deductedDaysTotal > 0) {
+        const extraPerGroup = deductedDaysTotal / nonMayGroups.length;
+        nonMayGroups.forEach(g => {
+          groupAllowances[g] += extraPerGroup;
+        });
+      }
+    }
+    
+    let resultData = {
+      grandTotal,
+      isPossible: !isOverCapacity,
+      groupAllowances,
+      details: [],
+      calendar: [],
+      periodLoads: { start: 0, middle: 0, end: 0 },
+      periodConflicts: []
+    };
+
+    let overages = [];
+    let underages = [];
+
+    Object.entries(totals).forEach(([group, total]) => {
+      const allowance = groupAllowances[group];
+      const diff = total - allowance;
+      if (diff > 0) overages.push({ group, days: diff, allowance });
+      else if (diff < 0) underages.push({ group, days: Math.abs(diff), allowance });
+    });
+
+    if (resultData.isPossible) {
+      if (overages.length === 0) {
+        resultData.summary = "All groups are within their effective allowances.";
+      } else {
+        resultData.summary = "Total requests fit within 42 days via allowance balancing.";
+        let explanation = overages.map(over => `${over.group} exceeded allowance by ${over.days} days.`).join(" ");
+        explanation += " Covered by: " + underages.map(under => `${under.group} (${under.days} unused)`).join(", ") + ".";
+        resultData.explanation = explanation;
+      }
+    } else {
+      resultData.summary = `Over Capacity! Total requested (${grandTotal}) exceeds ${TOTAL_SUMMER_DAYS} days.`;
+      resultData.explanation = `Balancing applied: 7 days deducted from groups selecting May Half Term and redistributed to other groups.`;
+    }
+
+    const familiesToSchedule = [];
+    Object.entries(FAMILY_GROUPS).forEach(([group, members]) => {
+      members.forEach(member => {
+        const famReq = targetRequests[member];
+        const d = parseInt(famReq.days, 10) || 0;
+        if (d > 0) {
+          resultData.periodLoads[famReq.pref] += d;
+          familiesToSchedule.push({ 
+            name: member, 
+            group, 
+            days: d, 
+            pref: famReq.pref,
+            mayHalfTerm: famReq.mayHalfTerm
+          });
+        }
+      });
+    });
+
+    if (resultData.periodLoads.start > 14) resultData.periodConflicts.push(`Start period (Days 1-14) requested total is ${resultData.periodLoads.start} days.`);
+    if (resultData.periodLoads.middle > 14) resultData.periodConflicts.push(`Middle period (Days 15-28) requested total is ${resultData.periodLoads.middle} days.`);
+    if (resultData.periodLoads.end > 14) resultData.periodConflicts.push(`End period (Days 29-42) requested total is ${resultData.periodLoads.end} days.`);
+    
+    resultData.hasSchedulingConflict = grandTotal > TOTAL_SUMMER_DAYS;
+
+    const prefOrder = { 'start': 1, 'middle': 2, 'end': 3 };
+    familiesToSchedule.sort((a, b) => {
+      if (a.mayHalfTerm !== b.mayHalfTerm) {
+        return a.mayHalfTerm ? 1 : -1; 
+      }
+      if (prefOrder[a.pref] !== prefOrder[b.pref]) {
+        return prefOrder[a.pref] - prefOrder[b.pref];
+      }
+      return b.days - a.days;
+    });
+
+    let currentDayPointer = 1;
+    resultData.calendar = familiesToSchedule.map(fam => {
+      const startDay = currentDayPointer;
+      const endDay = currentDayPointer + fam.days - 1;
+      currentDayPointer += fam.days; 
+      
+      return { ...fam, startDay, endDay, isOverflow: endDay > TOTAL_SUMMER_DAYS };
+    });
+
+    return resultData;
+  };
+
+  const calculateOverall = () => {
+    setOverallResult(runCalculation(requests));
+  };
+
+  const handleProposeSolution = () => {
+    let groupTotals = {
+      Hills: getGroupTotal('Hills'),
+      Bowmans: getGroupTotal('Bowmans'),
+      Wrights: getGroupTotal('Wrights')
+    };
+
+    const grandTotal = groupTotals.Hills + groupTotals.Bowmans + groupTotals.Wrights;
+    const isOverCapacity = grandTotal > TOTAL_SUMMER_DAYS;
+
+    let groupAllowances = {
+      Hills: BASE_ALLOWANCE_PER_GROUP,
+      Bowmans: BASE_ALLOWANCE_PER_GROUP,
+      Wrights: BASE_ALLOWANCE_PER_GROUP
+    };
+
+    if (isOverCapacity) {
+      let deductedDaysTotal = 0;
+      let nonMayGroups = [];
+
+      Object.entries(FAMILY_GROUPS).forEach(([group, members]) => {
+        const hasMay = members.some(m => requests[m].mayHalfTerm);
+        if (hasMay) {
+          groupAllowances[group] = Math.max(0, groupAllowances[group] - 7);
+          deductedDaysTotal += 7;
+        } else {
+          nonMayGroups.push(group);
+        }
+      });
+
+      if (nonMayGroups.length > 0 && deductedDaysTotal > 0) {
+        const extraPerGroup = deductedDaysTotal / nonMayGroups.length;
+        nonMayGroups.forEach(g => {
+          groupAllowances[g] += extraPerGroup;
+        });
+      }
+    }
+
+    let updatedRequests = JSON.parse(JSON.stringify(requests));
+
+    Object.entries(FAMILY_GROUPS).forEach(([groupName, members]) => {
+      const currentGroupTotal = groupTotals[groupName];
+      const targetAllowance = Math.floor(groupAllowances[groupName]);
+
+      if (currentGroupTotal > targetAllowance) {
+        const excess = currentGroupTotal - targetAllowance;
+        const memberDays = members.map(m => parseInt(updatedRequests[m].days, 10) || 0);
+        const groupMemberSum = memberDays.reduce((a, b) => a + b, 0);
+
+        if (groupMemberSum > 0) {
+          members.forEach((member, idx) => {
+            const orig = memberDays[idx];
+            if (orig > 0) {
+              const share = orig / groupMemberSum;
+              const cut = Math.round(excess * share);
+              const newDays = Math.max(1, orig - cut);
+              updatedRequests[member].days = newDays;
+            }
+          });
+        }
+      }
+    });
+
+    let newGrandTotal = Object.values(FAMILY_GROUPS).flat().reduce((sum, f) => sum + (parseInt(updatedRequests[f].days, 10) || 0), 0);
+    if (newGrandTotal > TOTAL_SUMMER_DAYS) {
+      let familyNames = Object.values(FAMILY_GROUPS).flat();
+      familyNames.sort((a, b) => (parseInt(updatedRequests[b].days, 10) || 0) - (parseInt(updatedRequests[a].days, 10) || 0));
+      
+      let diff = newGrandTotal - TOTAL_SUMMER_DAYS;
+      for (let f of familyNames) {
+        let currentD = parseInt(updatedRequests[f].days, 10) || 0;
+        if (currentD > 1 && diff > 0) {
+          let reduction = Math.min(diff, currentD - 1);
+          updatedRequests[f].days = currentD - reduction;
+          diff -= reduction;
+        }
+      }
+    }
+
+    setRequests(updatedRequests);
+    setOverallResult(runCalculation(updatedRequests));
+  };
+
+  const getGroupStyles = (groupName) => {
+    const total = getGroupTotal(groupName);
+    const allowance = overallResult?.groupAllowances ? overallResult.groupAllowances[groupName] : BASE_ALLOWANCE_PER_GROUP;
+    if (total <= allowance) {
+      return "bg-green-50 border-green-500 text-green-900";
+    }
+    return "bg-amber-50 border-amber-500 text-amber-900";
+  };
+
+  const allGroupsSubmitted = Object.values(groupSubmitted).every(status => status === true);
+  const grandTotalRequests = Object.values(FAMILY_GROUPS).flat().reduce((sum, f) => sum + (parseInt(requests[f].days, 10) || 0), 0);
+
+  return (
+    <div className="min-h-screen bg-gray-100 p-4 md:p-8 font-sans">
+      <div className="max-w-5xl mx-auto space-y-6">
+        
+        <header className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 text-center space-y-4">
+          <div className="flex items-center justify-center space-x-3">
+            <span className="text-3xl">🌴</span>
+            <h1 className="text-3xl font-bold text-gray-800 tracking-tight">Villa Booking System</h1>
+            <span className="text-3xl">🌴</span>
+          </div>
+          <p className="text-gray-500">Maximum capacity: {TOTAL_SUMMER_DAYS} days (6 weeks). Base allowance: {BASE_ALLOWANCE_PER_GROUP} days per group.</p>
+
+          <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl max-w-xl mx-auto flex flex-col items-center justify-center space-y-1">
+            <span className="text-xs uppercase tracking-wider font-bold text-amber-800">Submission Deadline: End of September</span>
+            <div className="flex space-x-4 text-amber-900 font-mono font-bold text-lg">
+              <div>{timeLeft.days} <span className="text-xs font-normal text-amber-700">Days</span></div>
+              <div>:</div>
+              <div>{timeLeft.hours} <span className="text-xs font-normal text-amber-700">Hours</span></div>
+              <div>:</div>
+              <div>{timeLeft.minutes} <span className="text-xs font-normal text-amber-700">Mins</span></div>
+              <div>:</div>
+              <div>{timeLeft.seconds} <span className="text-xs font-normal text-amber-700">Secs</span></div>
+            </div>
+          </div>
+
+          <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl text-xs text-blue-900 text-left max-w-3xl mx-auto space-y-2">
+            <p className="font-bold text-blue-950 text-sm">Rules & Assumptions:</p>
+            <ul className="list-disc list-inside space-y-1 text-blue-800 leading-relaxed">
+              <li><strong>Allowances:</strong> Each family group has a 14-day base allowance over the 6-week summer holiday (42 days total).</li>
+              <li><strong>May Half-Term:</strong> Selecting May half-term assigns lowest priority for summer slots and adjusts allowances by 7 days if over-capacity.</li>
+              <li><strong>Propose Best Solution:</strong> Automatically trims over-budget groups first to bring total spend in line with available days.</li>
+              <li><strong>Zero Overlap:</strong> The final calendar builds a strict chronological sequence from Day 1 to Day 42 so bookings never overlap.</li>
+            </ul>
+          </div>
+        </header>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {Object.entries(FAMILY_GROUPS).map(([groupName, families]) => {
+            const groupTotal = getGroupTotal(groupName);
+            const isSubmitted = groupSubmitted[groupName];
+            const styling = getGroupStyles(groupName);
+            const currentAllowance = overallResult?.groupAllowances ? overallResult.groupAllowances[groupName] : BASE_ALLOWANCE_PER_GROUP;
+
+            return (
+              <div key={groupName} className={`relative flex flex-col p-6 rounded-xl border-t-4 shadow-md transition-colors ${styling}`}>
+                
+                <div className="absolute top-4 right-4">
+                  {isSubmitted ? (
+                    <span className="bg-gray-800 text-white text-xs px-2 py-1 rounded-full font-semibold">Locked</span>
+                  ) : (
+                    <span className="bg-white/60 text-gray-800 text-xs px-2 py-1 rounded-full font-semibold">Editing</span>
+                  )}
+                </div>
+
+                <h2 className="text-2xl font-bold mb-4">{groupName} Family</h2>
+            
+                <div className="space-y-4 flex-grow">
+                  {families.map(family => (
+                    <div key={family} className="bg-white/60 p-3 rounded-lg shadow-sm flex flex-col space-y-3">
+                      <div className="flex justify-between items-center">
+                        <label className="font-medium text-gray-700">{family}</label>
+                      </div>
+                      
+                      <div className="flex space-x-2">
+                        <input
+                          type="number"
+                          min="0"
+                          max={TOTAL_SUMMER_DAYS}
+                          value={requests[family].days}
+                          onChange={(e) => handleRequestChange(family, 'days', e.target.value)}
+                          disabled={isSubmitted}
+                          className="w-20 p-2 border border-gray-300 rounded-md bg-white disabled:bg-gray-100 disabled:text-gray-400 focus:ring-2 focus:ring-blue-500 outline-none"
+                          placeholder="Days"
+                        />
+                        <select
+                          value={requests[family].pref}
+                          onChange={(e) => handleRequestChange(family, 'pref', e.target.value)}
+                          disabled={isSubmitted}
+                          className="flex-grow p-2 border border-gray-300 rounded-md bg-white disabled:bg-gray-100 disabled:text-gray-400 focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
+                        >
+                          <option value="start">Start</option>
+                          <option value="middle">Middle</option>
+                          <option value="end">End</option>
+                        </select>
+                      </div>
+
+                      <label className="flex items-center space-x-2 text-xs text-gray-600 cursor-pointer pt-1">
+                        <input
+                          type="checkbox"
+                          checked={requests[family].mayHalfTerm}
+                          onChange={(e) => handleRequestChange(family, 'mayHalfTerm', e.target.checked)}
+                          disabled={isSubmitted}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>Preference May Half Term <span className="text-gray-400 font-medium">(Lowest summer priority)</span></span>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-6 pt-4 border-t border-black/10">
+                  <div className="flex justify-between items-center mb-4">
+                    <span className="font-semibold">Group Allowance:</span>
+                    <span className={`text-xl font-bold ${groupTotal > currentAllowance ? 'text-amber-600' : 'text-green-600'}`}>
+                      {groupTotal} / {Number.isInteger(currentAllowance) ? currentAllowance : currentAllowance.toFixed(1)} days
+                    </span>
+                  </div>
+                  
+                  {!isSubmitted ? (
+                    <button
+                      onClick={() => handleGroupSubmit(groupName)}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                    >
+                      Submit {groupName} Request
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleGroupEdit(groupName)}
+                      className="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors"
+                    >
+                      Edit Requests
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 text-center space-y-4">
+          <h3 className="text-xl font-bold text-gray-800">Final Allocation</h3>
+          
+          <div className="flex flex-wrap justify-center gap-4">
+            <button
+              onClick={calculateOverall}
+              disabled={!allGroupsSubmitted}
+              className={`px-8 py-3 rounded-xl font-bold text-lg transition-all ${
+                allGroupsSubmitted 
+                  ? 'bg-gray-900 hover:bg-gray-800 text-white shadow-lg transform hover:-translate-y-0.5' 
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              }`}
+            >
+              {allGroupsSubmitted ? 'Calculate Overall Balance' : 'Waiting for all groups to submit...'}
+            </button>
+
+            {allGroupsSubmitted && grandTotalRequests > TOTAL_SUMMER_DAYS && (
+              <button
+                onClick={handleProposeSolution}
+                className="px-8 py-3 rounded-xl font-bold text-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg transform hover:-translate-y-0.5 transition-all"
+              >
+                Propose Best Solution
+              </button>
+            )}
+          </div>
+
+          {overallResult && (
+            <div className={`mt-6 p-6 rounded-xl text-left border ${
+              !overallResult.isPossible ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'
+            }`}>
+              
+              <div className="flex items-center space-x-3 mb-4 border-b border-black/10 pb-4">
+                <div className={`w-4 h-4 rounded-full ${
+                  !overallResult.isPossible ? 'bg-red-500' : 'bg-green-500'
+                }`}></div>
+                <h4 className={`text-2xl font-bold ${
+                  !overallResult.isPossible ? 'text-red-800' : 'text-green-800'
+                }`}>
+                  {!overallResult.isPossible ? 'Over Total Capacity (Half-Term Balancing Applied)' : 'Perfect Allocation & Sequential Calendar!'}
+                </h4>
+              </div>
+              
+              <div className="grid md:grid-cols-2 gap-6 text-gray-800">
+                
+                <div className="space-y-3">
+                  <h5 className="font-bold uppercase tracking-wider text-sm text-gray-500">Duration Check</h5>
+                  <p className="font-semibold text-lg">
+                    Total Requested: {overallResult.grandTotal} / {TOTAL_SUMMER_DAYS} days
+                  </p>
+                  <p className="font-medium text-sm">{overallResult.summary}</p>
+                  {overallResult.explanation && (
+                    <p className="text-xs bg-white/60 p-2 rounded border border-black/5 leading-relaxed">
+                      {overallResult.explanation}
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-3">
+                  <h5 className="font-bold uppercase tracking-wider text-sm text-gray-500">Timeline Overview</h5>
+                  <p className="text-sm text-gray-600">
+                    Bookings are sequenced back-to-back from Day 1 to Day 42 to ensure zero overlap between families.
+                  </p>
+                </div>
+              </div>
+            
+              {overallResult.calendar && overallResult.calendar.length > 0 && (
+                <div className="mt-8 pt-6 border-t border-black/10">
+                  <h5 className="font-bold text-gray-900 mb-4">Proposed Sequential Timeline Calendar</h5>
+                  <div className="space-y-2">
+                    {overallResult.calendar.map((booking, idx) => (
+                      <div key={idx} className="flex items-center justify-between p-3 rounded-md shadow-sm border bg-white border-gray-100">
+                        <div className="flex items-center space-x-3">
+                          <span className="w-6 h-6 flex items-center justify-center bg-gray-100 text-gray-700 font-bold rounded-full text-xs">
+                            {idx + 1}
+                          </span>
+                          <div>
+                            <span className="font-bold text-gray-800">{booking.name}</span>
+                            <span className="text-xs text-gray-500 ml-2">({booking.group})</span>
+                            <span className="text-xs uppercase tracking-wider ml-2 px-2 py-0.5 rounded bg-gray-100 text-gray-600">
+                              Pref: {booking.pref}
+                            </span>
+                            {booking.mayHalfTerm && (
+                              <span className="text-xs ml-2 px-2 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">
+                                May Half-Term Pref
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-sm font-bold text-blue-800 bg-blue-50 px-4 py-1.5 rounded-full">
+                          Day {booking.startDay} – Day {booking.endDay} ({booking.days} days)
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+      </div>
+    </div>
+  );
+}
