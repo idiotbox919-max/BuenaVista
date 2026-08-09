@@ -45,6 +45,7 @@
       });
 
       const [overallResult, setOverallResult] = useState(null);
+      const [proposedSolution, setProposedSolution] = useState(null);
       const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
 
       useEffect(() => {
@@ -76,6 +77,7 @@
           }
         }));
         setOverallResult(null);
+        setProposedSolution(null);
       };
 
       const getGroupTotal = (groupName, customRequests = requests) => {
@@ -92,6 +94,7 @@
       const handleGroupEdit = (groupName) => {
         setGroupSubmitted(prev => ({ ...prev, [groupName]: false }));
         setOverallResult(null);
+        setProposedSolution(null);
       };
 
       const runCalculation = (targetRequests) => {
@@ -136,7 +139,6 @@
           grandTotal,
           isPossible: !isOverCapacity,
           groupAllowances,
-          details: [],
           calendar: [],
           periodLoads: { start: 0, middle: 0, end: 0 },
           periodConflicts: []
@@ -190,13 +192,6 @@
           });
         });
 
-        if (resultData.periodLoads.start > 14) resultData.periodConflicts.push(`Start period (Days 1-14) requested total is ${resultData.periodLoads.start} days.`);
-        if (resultData.periodLoads.middle > 14) resultData.periodConflicts.push(`Middle period (Days 15-28) requested total is ${resultData.periodLoads.middle} days.`);
-        if (resultData.periodLoads.end > 14) resultData.periodConflicts.push(`End period (Days 29-42) requested total is ${resultData.periodLoads.end} days.`);
-        
-        resultData.hasSchedulingConflict = grandTotal > TOTAL_SUMMER_DAYS;
-
-        // Sort pools to prioritize non-May half term or larger day requests within preference windows
         const poolSorter = (a, b) => {
           if (a.mayHalfTerm !== b.mayHalfTerm) return a.mayHalfTerm ? 1 : -1;
           return b.days - a.days;
@@ -220,6 +215,7 @@
       };
 
       const calculateOverall = () => {
+        setProposedSolution(null);
         setOverallResult(runCalculation(requests));
       };
 
@@ -302,7 +298,7 @@
           }
         }
 
-        setRequests(updatedRequests);
+        setProposedSolution(updatedRequests);
         setOverallResult(runCalculation(updatedRequests));
       };
 
@@ -348,7 +344,7 @@
                 <ul className="list-disc list-inside space-y-1 text-blue-800 leading-relaxed">
                   <li><strong>Allowances:</strong> Each family group has a 14-day base allowance over the 6-week summer holiday (42 days total).</li>
                   <li><strong>May Half-Term:</strong> Selecting May half-term adjusts allowances by 7 days if over-capacity.</li>
-                  <li><strong>Propose Best Solution:</strong> Automatically trims over-budget groups first to bring total spend in line with available days.</li>
+                  <li><strong>Propose Best Solution:</strong> Automatically trims over-budget groups first while allowing you to compare original vs. proposed days side-by-side.</li>
                   <li><strong>Zero Overlap:</strong> The final calendar builds a strict chronological sequence from Day 1 to Day 42 prioritizing preferred periods (Start, Middle, End).</li>
                 </ul>
               </div>
@@ -489,8 +485,7 @@
                     </h4>
                   </div>
                   
-                  <div className="grid md:grid-cols-2 gap-6 text-gray-800">
-                    
+                  <div className="grid md:grid-cols-2 gap-6 text-gray-800 mb-6">
                     <div className="space-y-3">
                       <h5 className="font-bold uppercase tracking-wider text-sm text-gray-500">Duration Check</h5>
                       <p className="font-semibold text-lg">
@@ -511,6 +506,47 @@
                       </p>
                     </div>
                   </div>
+
+                  {proposedSolution && (
+                    <div className="mb-6 p-4 bg-white rounded-lg border border-indigo-200 shadow-sm">
+                      <h5 className="font-bold text-indigo-900 mb-3">Original Request vs. Trimmed Proposal Comparison</h5>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left text-gray-700">
+                          <thead className="bg-indigo-50 text-indigo-900 uppercase text-xs">
+                            <tr>
+                              <th className="p-2">Family</th>
+                              <th className="p-2">Original Days</th>
+                              <th className="p-2">Proposed Days</th>
+                              <th className="p-2">Difference</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {Object.keys(requests).map(family => {
+                              const orig = parseInt(requests[family].days, 10) || 0;
+                              const prop = parseInt(proposedSolution[family].days, 10) || 0;
+                              const diff = prop - orig;
+                              return (
+                                <tr key={family}>
+                                  <td className="p-2 font-medium text-gray-900">{family}</td>
+                                  <td className="p-2">{orig} days</td>
+                                  <td className="p-2 font-bold text-indigo-600">{prop} days</td>
+                                  <td className="p-2">
+                                    {diff === 0 ? (
+                                      <span className="text-gray-400">Unchanged</span>
+                                    ) : diff > 0 ? (
+                                      <span className="text-green-600">+{diff} days</span>
+                                    ) : (
+                                      <span className="text-red-600">{diff} days</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 
                   {overallResult.calendar && overallResult.calendar.length > 0 && (
                     <div className="mt-8 pt-6 border-t border-black/10">
