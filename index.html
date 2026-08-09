@@ -166,20 +166,26 @@
           resultData.explanation = `Balancing applied: 7 days deducted from groups selecting May Half Term and redistributed to other groups.`;
         }
 
-        const familiesToSchedule = [];
+        const startPool = [];
+        const middlePool = [];
+        const endPool = [];
+
         Object.entries(FAMILY_GROUPS).forEach(([group, members]) => {
           members.forEach(member => {
             const famReq = targetRequests[member];
             const d = parseInt(famReq.days, 10) || 0;
             if (d > 0) {
               resultData.periodLoads[famReq.pref] += d;
-              familiesToSchedule.push({ 
+              const item = { 
                 name: member, 
                 group, 
                 days: d, 
                 pref: famReq.pref,
                 mayHalfTerm: famReq.mayHalfTerm
-              });
+              };
+              if (famReq.pref === 'start') startPool.push(item);
+              else if (famReq.pref === 'middle') middlePool.push(item);
+              else endPool.push(item);
             }
           });
         });
@@ -190,19 +196,19 @@
         
         resultData.hasSchedulingConflict = grandTotal > TOTAL_SUMMER_DAYS;
 
-        const prefOrder = { 'start': 1, 'middle': 2, 'end': 3 };
-        familiesToSchedule.sort((a, b) => {
-          if (a.mayHalfTerm !== b.mayHalfTerm) {
-            return a.mayHalfTerm ? 1 : -1; 
-          }
-          if (prefOrder[a.pref] !== prefOrder[b.pref]) {
-            return prefOrder[a.pref] - prefOrder[b.pref];
-          }
+        // Sort pools to prioritize non-May half term or larger day requests within preference windows
+        const poolSorter = (a, b) => {
+          if (a.mayHalfTerm !== b.mayHalfTerm) return a.mayHalfTerm ? 1 : -1;
           return b.days - a.days;
-        });
+        };
+        startPool.sort(poolSorter);
+        middlePool.sort(poolSorter);
+        endPool.sort(poolSorter);
+
+        const orderedFamilies = [...startPool, ...middlePool, ...endPool];
 
         let currentDayPointer = 1;
-        resultData.calendar = familiesToSchedule.map(fam => {
+        resultData.calendar = orderedFamilies.map(fam => {
           const startDay = currentDayPointer;
           const endDay = currentDayPointer + fam.days - 1;
           currentDayPointer += fam.days; 
@@ -341,9 +347,9 @@
                 <p className="font-bold text-blue-950 text-sm">Rules & Assumptions:</p>
                 <ul className="list-disc list-inside space-y-1 text-blue-800 leading-relaxed">
                   <li><strong>Allowances:</strong> Each family group has a 14-day base allowance over the 6-week summer holiday (42 days total).</li>
-                  <li><strong>May Half-Term:</strong> Selecting May half-term assigns lowest priority for summer slots and adjusts allowances by 7 days if over-capacity.</li>
+                  <li><strong>May Half-Term:</strong> Selecting May half-term adjusts allowances by 7 days if over-capacity.</li>
                   <li><strong>Propose Best Solution:</strong> Automatically trims over-budget groups first to bring total spend in line with available days.</li>
-                  <li><strong>Zero Overlap:</strong> The final calendar builds a strict chronological sequence from Day 1 to Day 42 so bookings never overlap.</li>
+                  <li><strong>Zero Overlap:</strong> The final calendar builds a strict chronological sequence from Day 1 to Day 42 prioritizing preferred periods (Start, Middle, End).</li>
                 </ul>
               </div>
             </header>
@@ -406,7 +412,7 @@
                               disabled={isSubmitted}
                               className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                             />
-                            <span>Preference May Half Term <span className="text-gray-400 font-medium">(Lowest summer priority)</span></span>
+                            <span>Preference May Half Term</span>
                           </label>
                         </div>
                       ))}
@@ -501,7 +507,7 @@
                     <div className="space-y-3">
                       <h5 className="font-bold uppercase tracking-wider text-sm text-gray-500">Timeline Overview</h5>
                       <p className="text-sm text-gray-600">
-                        Bookings are sequenced back-to-back from Day 1 to Day 42 to ensure zero overlap between families.
+                        Bookings are sequenced starting with Start preferences, followed by Middle, and then End preferences.
                       </p>
                     </div>
                   </div>
