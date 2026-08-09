@@ -47,6 +47,11 @@
       const [overallResult, setOverallResult] = useState(null);
       const [proposedSolution, setProposedSolution] = useState(null);
       const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
+      
+      // Password modal state
+      const [showPasswordModal, setShowPasswordModal] = useState(false);
+      const [passwordInput, setPasswordInput] = useState('');
+      const [passwordError, setPasswordError] = useState(false);
 
       useEffect(() => {
         const calculateTimeLeft = () => {
@@ -214,9 +219,22 @@
         return resultData;
       };
 
-      const calculateOverall = () => {
-        setProposedSolution(null);
-        setOverallResult(runCalculation(requests));
+      const handleCalculateClick = () => {
+        setShowPasswordModal(true);
+        setPasswordInput('');
+        setPasswordError(false);
+      };
+
+      const handlePasswordSubmit = (e) => {
+        e.preventDefault();
+        if (passwordInput === 'Buenavista') {
+          setShowPasswordModal(false);
+          setPasswordError(false);
+          setProposedSolution(null);
+          setOverallResult(runCalculation(requests));
+        } else {
+          setPasswordError(true);
+        }
       };
 
       const handleProposeSolution = () => {
@@ -313,6 +331,15 @@
 
       const allGroupsSubmitted = Object.values(groupSubmitted).every(status => status === true);
       const grandTotalRequests = Object.values(FAMILY_GROUPS).flat().reduce((sum, f) => sum + (parseInt(requests[f].days, 10) || 0), 0);
+
+      const getPrefBadgeStyle = (pref) => {
+        switch (pref) {
+          case 'start': return 'bg-sky-50 text-sky-700 border border-sky-200';
+          case 'middle': return 'bg-emerald-50 text-emerald-700 border border-emerald-200';
+          case 'end': return 'bg-amber-50 text-amber-700 border border-amber-200';
+          default: return 'bg-gray-50 text-gray-700 border border-gray-200';
+        }
+      };
 
       return (
         <div className="min-h-screen bg-gray-100 p-4 md:p-8 font-sans">
@@ -448,7 +475,7 @@
               
               <div className="flex flex-wrap justify-center gap-4">
                 <button
-                  onClick={calculateOverall}
+                  onClick={handleCalculateClick}
                   disabled={!allGroupsSubmitted}
                   className={`px-8 py-3 rounded-xl font-bold text-lg transition-all ${
                     allGroupsSubmitted 
@@ -561,17 +588,17 @@
                               <div>
                                 <span className="font-bold text-gray-800">{booking.name}</span>
                                 <span className="text-xs text-gray-500 ml-2">({booking.group})</span>
-                                <span className="text-xs uppercase tracking-wider ml-2 px-2 py-0.5 rounded bg-gray-100 text-gray-600">
+                                <span className={`text-xs uppercase tracking-wider font-semibold ml-2 px-2.5 py-0.5 rounded-full ${getPrefBadgeStyle(booking.pref)}`}>
                                   Pref: {booking.pref}
                                 </span>
                                 {booking.mayHalfTerm && (
-                                  <span className="text-xs ml-2 px-2 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">
-                                    May Half-Term Pref
+                                  <span className="text-xs ml-2 px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-700 font-semibold border border-purple-200">
+                                    May Half-Term
                                   </span>
                                 )}
                               </div>
                             </div>
-                            <div className="text-sm font-bold text-blue-800 bg-blue-50 px-4 py-1.5 rounded-full">
+                            <div className="text-sm font-bold text-blue-800 bg-blue-50 px-4 py-1.5 rounded-full border border-blue-100">
                               Day {booking.startDay} – Day {booking.endDay} ({booking.days} days)
                             </div>
                           </div>
@@ -584,6 +611,57 @@
             </div>
 
           </div>
+
+          {/* Password Modal */}
+          {showPasswordModal && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-xl space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-gray-900">Enter Access Password</h3>
+                  <button 
+                    onClick={() => setShowPasswordModal(false)}
+                    className="text-gray-400 hover:text-gray-600 font-bold text-xl"
+                  >
+                    &times;
+                  </button>
+                </div>
+                <p className="text-sm text-gray-600">Please enter the password to calculate the overall balance and view the schedule.</p>
+                
+                <form onSubmit={handlePasswordSubmit} className="space-y-3">
+                  <input
+                    type="password"
+                    value={passwordInput}
+                    onChange={(e) => {
+                      setPasswordInput(e.target.value);
+                      setPasswordError(false);
+                    }}
+                    placeholder="Enter password"
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    autoFocus
+                  />
+                  {passwordError && (
+                    <p className="text-xs text-red-600 font-medium">Incorrect password. Please try again.</p>
+                  )}
+                  <div className="flex space-x-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswordModal(false)}
+                      className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2.5 px-4 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition-colors"
+                    >
+                      Unlock
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
         </div>
       );
     }
