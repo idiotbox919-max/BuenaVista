@@ -46,12 +46,14 @@
 
       const [overallResult, setOverallResult] = useState(null);
       const [proposedSolution, setProposedSolution] = useState(null);
+      const [solutionType, setSolutionType] = useState(null); // 'group' or 'family'
       const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
       
-      // Password modal state
-      const [showPasswordModal, setShowPasswordModal] = useState(false);
-      const [passwordInput, setPasswordInput] = useState('');
-      const [passwordError, setPasswordError] = useState(false);
+      // Calculation confirmation modal state
+      const [showCalcConfirmModal, setShowCalcConfirmModal] = useState(false);
+
+      // Group submission confirmation state
+      const [pendingGroupSubmit, setPendingGroupSubmit] = useState(null);
 
       useEffect(() => {
         const calculateTimeLeft = () => {
@@ -83,6 +85,7 @@
         }));
         setOverallResult(null);
         setProposedSolution(null);
+        setSolutionType(null);
       };
 
       const getGroupTotal = (groupName, customRequests = requests) => {
@@ -92,14 +95,16 @@
         }, 0);
       };
 
-      const handleGroupSubmit = (groupName) => {
+      const confirmGroupSubmit = (groupName) => {
         setGroupSubmitted(prev => ({ ...prev, [groupName]: true }));
+        setPendingGroupSubmit(null);
       };
 
       const handleGroupEdit = (groupName) => {
         setGroupSubmitted(prev => ({ ...prev, [groupName]: false }));
         setOverallResult(null);
         setProposedSolution(null);
+        setSolutionType(null);
       };
 
       const runCalculation = (targetRequests) => {
@@ -220,24 +225,17 @@
       };
 
       const handleCalculateClick = () => {
-        setShowPasswordModal(true);
-        setPasswordInput('');
-        setPasswordError(false);
+        setShowCalcConfirmModal(true);
       };
 
-      const handlePasswordSubmit = (e) => {
-        e.preventDefault();
-        if (passwordInput === 'Buenavista') {
-          setShowPasswordModal(false);
-          setPasswordError(false);
-          setProposedSolution(null);
-          setOverallResult(runCalculation(requests));
-        } else {
-          setPasswordError(true);
-        }
+      const confirmCalculation = () => {
+        setShowCalcConfirmModal(false);
+        setProposedSolution(null);
+        setSolutionType(null);
+        setOverallResult(runCalculation(requests));
       };
 
-      const handleProposeSolution = () => {
+      const handleProposeGroupSolution = () => {
         let groupTotals = {
           Hills: getGroupTotal('Hills'),
           Bowmans: getGroupTotal('Bowmans'),
@@ -245,15 +243,18 @@
         };
 
         const grandTotal = groupTotals.Hills + groupTotals.Bowmans + groupTotals.Wrights;
-        const isOverCapacity = grandTotal > TOTAL_SUMMER_DAYS;
+        let updatedRequests = JSON.parse(JSON.stringify(requests));
 
-        let groupAllowances = {
-          Hills: BASE_ALLOWANCE_PER_GROUP,
-          Bowmans: BASE_ALLOWANCE_PER_GROUP,
-          Wrights: BASE_ALLOWANCE_PER_GROUP
-        };
+        // Only trim if grand total exceeds 42 days capacity
+        if (grandTotal > TOTAL_SUMMER_DAYS) {
+          const totalExcess = grandTotal - TOTAL_SUMMER_DAYS;
 
-        if (isOverCapacity) {
+          let groupAllowances = {
+            Hills: BASE_ALLOWANCE_PER_GROUP,
+            Bowmans: BASE_ALLOWANCE_PER_GROUP,
+            Wrights: BASE_ALLOWANCE_PER_GROUP
+          };
+
           let deductedDaysTotal = 0;
           let nonMayGroups = [];
 
@@ -273,43 +274,97 @@
               groupAllowances[g] += extraPerGroup;
             });
           }
-        }
 
-        let updatedRequests = JSON.parse(JSON.stringify(requests));
+          let groupExcesses = {};
+          let totalGroupExcess = 0;
+          Object.entries(groupTotals).forEach(([group, total]) => {
+            const allowance = groupAllowances[group];
+            const diff = total - allowance;
+            if (diff > 0) {
+              groupExcesses[group] = diff;
+              totalGroupExcess += diff;
+            } else {
+              groupExcesses[group] = 0;
+            }
+          });
 
-        Object.entries(FAMILY_GROUPS).forEach(([groupName, members]) => {
-          const currentGroupTotal = groupTotals[groupName];
-          const targetAllowance = Math.floor(groupAllowances[groupName]);
+          const targetCut = Math.min(totalExcess, totalGroupExcess > 0 ? totalGroupExcess : totalExcess);
 
-          if (currentGroupTotal > targetAllowance) {
-            const excess = currentGroupTotal - targetAllowance;
-            const memberDays = members.map(m => parseInt(updatedRequests[m].days, 10) || 0);
-            const groupMemberSum = memberDays.reduce((a, b) => a + b, 0);
+          Object.entries(FAMILY_GROUPS).forEach(([groupName, members]) => {
+            const gExcess = groupExcesses[groupName];
+            if (gExcess > 0 && totalGroupExcess > 0) {
+              const groupShareOfExcess = gExcess / totalGroupExcess;
+              const groupTargetCut = Math.round(targetCut * groupShareOfExcess);
+              
+              // Filter members requesting > 7 days (protecting <= 7 days)
+              const eligibleMembers = members.filter(m => (parseInt(updatedRequests[m].days, 10) || 0) > 7);
+              const eligibleSum = eligibleMembers.reduce((sum, m) => sum + (parseInt(updatedRequests[m].days, 10) || 0), 0);
 
-            if (groupMemberSum > 0) {
-              members.forEach((member, idx) => {
-                const orig = memberDays[idx];
-                if (orig > 0) {
-                  const share = orig / groupMemberSum;
-                  const cut = Math.round(excess * share);
-                  const newDays = Math.max(1, orig - cut);
-                  updatedRequests[member].days = newDays;
-                }
-              });
+              if (eligibleSum > 0) {
+                eligibleMembers.forEach(member => {
+                  const orig = parseInt(updatedRequests[member].days, 10) || 0;
+                  const share = orig / eligibleSum;
+                  const cut = Math.round(groupTargetCut * share);
+                  updatedRequests[member].days = Math.max(7, orig - cut);
+                });
+              }
+            }
+          });
+
+          // Final fine-tune loop to hit exactly 42 days (only cutting from >7 day families)
+          let newGrandTotal = Object.values(FAMILY_GROUPS).flat().reduce((sum, f) => sum + (parseInt(updatedRequests[f].days, 10) || 0), 0);
+          if (newGrandTotal > TOTAL_SUMMER_DAYS) {
+            let familyNames = Object.values(FAMILY_GROUPS).flat().filter(f => (parseInt(updatedRequests[f].days, 10) || 0) > 7);
+            familyNames.sort((a, b) => (parseInt(updatedRequests[b].days, 10) || 0) - (parseInt(updatedRequests[a].days, 10) || 0));
+            
+            let diff = newGrandTotal - TOTAL_SUMMER_DAYS;
+            for (let f of familyNames) {
+              let currentD = parseInt(updatedRequests[f].days, 10) || 0;
+              if (currentD > 7 && diff > 0) {
+                let reduction = Math.min(diff, currentD - 7);
+                updatedRequests[f].days = currentD - reduction;
+                diff -= reduction;
+              }
             }
           }
-        });
+        }
 
-        let newGrandTotal = Object.values(FAMILY_GROUPS).flat().reduce((sum, f) => sum + (parseInt(updatedRequests[f].days, 10) || 0), 0);
-        if (newGrandTotal > TOTAL_SUMMER_DAYS) {
-          let familyNames = Object.values(FAMILY_GROUPS).flat();
-          familyNames.sort((a, b) => (parseInt(updatedRequests[b].days, 10) || 0) - (parseInt(updatedRequests[a].days, 10) || 0));
+        setProposedSolution(updatedRequests);
+        setSolutionType('group');
+        setOverallResult(runCalculation(updatedRequests));
+      };
+
+      const handleProposeFamilySolution = () => {
+        let updatedRequests = JSON.parse(JSON.stringify(requests));
+        const allFamilies = Object.values(FAMILY_GROUPS).flat();
+        const currentGrandTotal = allFamilies.reduce((sum, f) => sum + (parseInt(updatedRequests[f].days, 10) || 0), 0);
+
+        if (currentGrandTotal > TOTAL_SUMMER_DAYS) {
+          const excess = currentGrandTotal - TOTAL_SUMMER_DAYS;
           
-          let diff = newGrandTotal - TOTAL_SUMMER_DAYS;
-          for (let f of familyNames) {
+          // Only families requesting > 7 days take the cuts
+          const eligibleFamilies = allFamilies.filter(f => (parseInt(updatedRequests[f].days, 10) || 0) > 7);
+          const eligibleSum = eligibleFamilies.reduce((sum, f) => sum + (parseInt(updatedRequests[f].days, 10) || 0), 0);
+
+          if (eligibleSum > 0) {
+            eligibleFamilies.forEach(family => {
+              const orig = parseInt(updatedRequests[family].days, 10) || 0;
+              const share = orig / eligibleSum;
+              const cut = Math.round(excess * share);
+              updatedRequests[family].days = Math.max(7, orig - cut);
+            });
+          }
+
+          // Final fine-tune loop to hit exactly 42 days (respecting the 7-day floor)
+          let adjustedTotal = allFamilies.reduce((sum, f) => sum + (parseInt(updatedRequests[f].days, 10) || 0), 0);
+          let flexibleFamilies = allFamilies.filter(f => (parseInt(updatedRequests[f].days, 10) || 0) > 7);
+          flexibleFamilies.sort((a, b) => (parseInt(updatedRequests[b].days, 10) || 0) - (parseInt(updatedRequests[a].days, 10) || 0));
+          
+          let diff = adjustedTotal - TOTAL_SUMMER_DAYS;
+          for (let f of flexibleFamilies) {
             let currentD = parseInt(updatedRequests[f].days, 10) || 0;
-            if (currentD > 1 && diff > 0) {
-              let reduction = Math.min(diff, currentD - 1);
+            if (currentD > 7 && diff > 0) {
+              let reduction = Math.min(diff, currentD - 7);
               updatedRequests[f].days = currentD - reduction;
               diff -= reduction;
             }
@@ -317,6 +372,7 @@
         }
 
         setProposedSolution(updatedRequests);
+        setSolutionType('family');
         setOverallResult(runCalculation(updatedRequests));
       };
 
@@ -379,9 +435,9 @@
                 <p className="font-bold text-blue-950 text-sm">Rules & Assumptions:</p>
                 <ul className="list-disc list-inside space-y-1 text-blue-800 leading-relaxed">
                   <li><strong>Allowances:</strong> Each family group has a 14-day base allowance over the 6-week summer holiday (42 days total).</li>
-                  <li><strong>May Half-Term:</strong> Selecting May half-term adjusts allowances by 7 days if over-capacity.</li>
-                  <li><strong>Propose Best Solution:</strong> Automatically trims over-budget groups first while allowing you to compare original vs. proposed days side-by-side.</li>
-                  <li><strong>Zero Overlap:</strong> The final calendar builds a strict chronological sequence from Day 1 to Day 42 prioritizing preferred periods (Start, Middle, End).</li>
+                  <li><strong>May Half-Term:</strong> Selecting May half-term adjusts group allowances by 7 days if over-capacity.</li>
+                  <li><strong>Protected Short Requests:</strong> Any individual family requesting 7 days or less is fully protected from trimming. Only requests above 7 days absorb capacity adjustments.</li>
+                  <li><strong>Zero Overlap:</strong> The final calendar builds a strict chronological sequence from Day 1 to Day 42, prioritizing preferred windows (Start, Middle, End of Holidays Preferenced).</li>
                 </ul>
               </div>
             </header>
@@ -460,7 +516,7 @@
                       
                       {!isSubmitted ? (
                         <button
-                          onClick={() => handleGroupSubmit(groupName)}
+                          onClick={() => setPendingGroupSubmit(groupName)}
                           className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
                         >
                           Submit {groupName} Request
@@ -496,12 +552,20 @@
                 </button>
 
                 {allGroupsSubmitted && grandTotalRequests > TOTAL_SUMMER_DAYS && (
-                  <button
-                    onClick={handleProposeSolution}
-                    className="px-8 py-3 rounded-xl font-bold text-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg transform hover:-translate-y-0.5 transition-all"
-                  >
-                    Propose Best Solution
-                  </button>
+                  <div className="flex flex-wrap gap-3 justify-center">
+                    <button
+                      onClick={handleProposeGroupSolution}
+                      className="px-6 py-3 rounded-xl font-bold text-base bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg transform hover:-translate-y-0.5 transition-all"
+                    >
+                      Propose Group-Level Solution
+                    </button>
+                    <button
+                      onClick={handleProposeFamilySolution}
+                      className="px-6 py-3 rounded-xl font-bold text-base bg-purple-600 hover:bg-purple-700 text-white shadow-lg transform hover:-translate-y-0.5 transition-all"
+                    >
+                      Propose Family-Level Solution
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -545,7 +609,12 @@
 
                   {proposedSolution && (
                     <div className="mb-6 p-4 bg-white rounded-lg border border-indigo-200 shadow-sm">
-                      <h5 className="font-bold text-indigo-900 mb-3">Original Request vs. Trimmed Proposal Comparison</h5>
+                      <div className="flex justify-between items-center mb-3">
+                        <h5 className="font-bold text-indigo-900">Original Request vs. Trimmed Proposal Comparison</h5>
+                        <span className="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full border border-indigo-100 uppercase">
+                          Mode: {solutionType === 'group' ? 'Group-Level Trimming' : 'Family-Level Trimming'} (≤7 days protected)
+                        </span>
+                      </div>
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm text-left text-gray-700">
                           <thead className="bg-indigo-50 text-indigo-900 uppercase text-xs">
@@ -621,52 +690,74 @@
 
           </div>
 
-          {/* Password Modal */}
-          {showPasswordModal && (
+          {/* Group Submission Confirmation Modal */}
+          {pendingGroupSubmit && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-xl space-y-4">
                 <div className="flex justify-between items-center">
-                  <h3 className="text-lg font-bold text-gray-900">Enter Access Password</h3>
+                  <h3 className="text-lg font-bold text-gray-900">Confirm {pendingGroupSubmit} Family Submission</h3>
                   <button 
-                    onClick={() => setShowPasswordModal(false)}
+                    onClick={() => setPendingGroupSubmit(null)}
                     className="text-gray-400 hover:text-gray-600 font-bold text-xl"
                   >
                     &times;
                   </button>
                 </div>
-                <p className="text-sm text-gray-600">Please enter the password to calculate the overall balance and view the schedule.</p>
-                
-                <form onSubmit={handlePasswordSubmit} className="space-y-3">
-                  <input
-                    type="password"
-                    value={passwordInput}
-                    onChange={(e) => {
-                      setPasswordInput(e.target.value);
-                      setPasswordError(false);
-                    }}
-                    placeholder="Enter password"
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    autoFocus
-                  />
-                  {passwordError && (
-                    <p className="text-xs text-red-600 font-medium">Incorrect password. Please try again.</p>
-                  )}
-                  <div className="flex space-x-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowPasswordModal(false)}
-                      className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2.5 px-4 rounded-lg transition-colors"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition-colors"
-                    >
-                      Unlock
-                    </button>
-                  </div>
-                </form>
+                <p className="text-sm text-gray-600">
+                  Are you sure you want to submit and lock the requests for the <strong>{pendingGroupSubmit}</strong> family group? Once locked, entries cannot be modified unless you unlock/edit them.
+                </p>
+                <div className="flex space-x-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setPendingGroupSubmit(null)}
+                    className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2.5 px-4 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => confirmGroupSubmit(pendingGroupSubmit)}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition-colors"
+                  >
+                    Confirm & Lock
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Calculation Confirmation Modal */}
+          {showCalcConfirmModal && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-xl space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-gray-900">Confirm Overall Calculation</h3>
+                  <button 
+                    onClick={() => setShowCalcConfirmModal(false)}
+                    className="text-gray-400 hover:text-gray-600 font-bold text-xl"
+                  >
+                    &times;
+                  </button>
+                </div>
+                <p className="text-sm text-gray-600 font-medium bg-amber-50 border border-amber-200 p-3 rounded-lg text-amber-900">
+                  You are about to submit requests on behalf of all families and calculate the overall balance.
+                </p>
+                <div className="flex space-x-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCalcConfirmModal(false)}
+                    className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2.5 px-4 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmCalculation}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition-colors"
+                  >
+                    Confirm & Calculate
+                  </button>
+                </div>
               </div>
             </div>
           )}
